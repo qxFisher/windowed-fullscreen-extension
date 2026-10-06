@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "checkJs": false,
+    "allowJs": true,
+    "noEmit": true,
+    "types": ["chrome"]
+  },
+  "include": [
+    "background.js",
+    "content.js"
+  ],
+  "exclude": [
+    "node_modules",
+    "web-ext-artifacts",
+    "dist"
+  ]
+}

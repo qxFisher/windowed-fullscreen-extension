@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Universal Adaptive Media Maximizer - Interactive Testbed</title>
+  <link rel="stylesheet" href="../../styles.css">
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #f8fafc;
+      --accent: #38bdf8;
+    }
+
+    body {
+      margin: 0;
+      padding: 30px;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 150vh; /* Verify page scrolling works */
+    }
+
+    header {
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 24px;
+      color: var(--accent);
+    }
+
+    p {
+      color: #94a3b8;
+      margin: 0 0 16px 0;
+      font-size: 14px;
+    }
+
+    .instructions {
+      background: rgba(56, 189, 248, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 20px;
+      font-size: 13px;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .action-btn {
+      background: #0284c7;
+      color: white;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background 0.15s ease;
+    }
+
+    .action-btn:hover {
+      background: #0369a1;
+    }
+
+    /* Complex SPA Stacking Context Trap Simulation */
+    .spa-ancestor-trap {
+      transform: translate3d(0, 0, 0);
+      filter: drop-shadow(0 10px 20px rgba(0, 0, 0, 0.4));
+      contain: layout style;
+      perspective: 1000px;
+      overflow: hidden;
+      border-radius: 12px;
+      background: var(--card);
+      border: 1px solid #334155;
+      padding: 20px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    .video-player {
+      position: relative;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      aspect-ratio: 16 / 9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    .player-controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 12px;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      background: #334155;
+      color: #cbd5e1;
+    }
+
+    .status-badge.active {
+      background: #059669;
+      color: #ecfdf5;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Universal Adaptive Media Maximizer — Interactive Testbed</h1>
+    <p>Simulating complex SPA stacking context traps, video playback, and extension interactions.</p>
+  </header>
+
+  <div class="instructions">
+    <strong>Verification Goals:</strong><br>
+    1. Click <em>"Toggle Windowed Fullscreen"</em> or press <kbd>⌘⌥F</kbd> / <kbd>⌥⇧F</kbd> / <kbd>⌘⇧F</kbd> (Mac) or <kbd>Alt+Shift+F</kbd> (Windows/Linux).<br>
+    2. Verify video expands seamlessly across full tab viewport and ancestor traps are neutralized.<br>
+    3. Verify Speed Controller overlay is visible and adjusting speed changes playback.<br>
+    4. Press <kbd>Escape</kbd> or click <em>"Toggle Windowed Fullscreen"</em> to restore view.
+  </div>
+
+  <div class="btn-row">
+    <button id="btn-toggle" class="action-btn">Toggle Fullscreen (⌘⌥F / ⌥⇧F / Alt+Shift+F)</button>
+    <button id="btn-play-pause" class="action-btn" style="background:#475569;">Play / Pause</button>
+    <span id="state-status" class="status-badge">Normal View</span>
+  </div>
+
+  <!-- SPA Ancestor Trap Container -->
+  <div class="spa-ancestor-trap" id="trap-container">
+    <div class="video-player" id="player-wrapper">
+      <video id="demo-video" playsinline autoplay muted loop></video>
+    </div>
+    <div class="player-controls">
+      <span>Synthetic 60fps Video Stream</span>
+      <span id="rate-display">Speed: 1.00x</span>
+    </div>
+  </div>
+
+  <!-- Hidden animation canvas to drive synthetic video stream -->
+  <canvas id="stream-canvas" width="640" height="360" style="display:none;"></canvas>
+
+  <script>
+    // Generate synthetic animated video stream
+    const canvas = document.getElementById('stream-canvas');
+    const ctx = canvas.getContext('2d');
+    const video = document.getElementById('demo-video');
+    let frame = 0;
+
+    function renderFrame() {
+      frame++;
+      // Background gradient
+      const grad = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+      grad.addColorStop(0, '#0f172a');
+      grad.addColorStop(1, '#1e1b4b');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Rotating animated geometric shapes
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate((frame * 0.03));
+      
+      ctx.fillStyle = '#00B0FF';
+      ctx.fillRect(-60, -60, 120, 120);
+
+      ctx.rotate((frame * -0.05));
+      ctx.fillStyle = '#00E676';
+      ctx.beginPath();
+      ctx.arc(0, 0, 45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Text overlay
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 24px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('Universal Media Maximizer Active', cx, cy + 110);
+      ctx.font = '16px monospace';
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText('Frame: ' + frame + ' | ' + new Date().toLocaleTimeString(), cx, cy + 140);
+
+      requestAnimationFrame(renderFrame);
+    }
+    renderFrame();
+
+    // Stream canvas to video element
+    try {
+      const stream = canvas.captureStream(30);
+      video.srcObject = stream;
+      video.play().catch(console.error);
+    } catch (e) {
+      console.warn('Canvas stream capture error:', e);
+    }
+
+    // Play/Pause button
+    const playPauseBtn = document.getElementById('btn-play-pause');
+    playPauseBtn.addEventListener('click', () => {
+      if (video.paused) {
+        video.play();
+        playPauseBtn.textContent = 'Pause';
+      } else {
+        video.pause();
+        playPauseBtn.textContent = 'Play';
+      }
+    });
+
+    // Speed display tracker
+    const rateDisplay = document.getElementById('rate-display');
+    video.addEventListener('ratechange', () => {
+      rateDisplay.textContent = 'Speed: ' + video.playbackRate.toFixed(2) + 'x';
+    });
+
+    // Wire external button to trigger MediaMaximizer
+    const toggleBtn = document.getElementById('btn-toggle');
+    const statusBadge = document.getElementById('state-status');
+
+    toggleBtn.addEventListener('click', () => {
+      if (window.__UVM_INSTANCE__) {
+        window.__UVM_INSTANCE__.toggle();
+        updateStatus();
+      }
+    });
+
+    function updateStatus() {
+      if (window.__UVM_INSTANCE__ && window.__UVM_INSTANCE__.isActive) {
+        statusBadge.textContent = 'Windowed Fullscreen Active';
+        statusBadge.classList.add('active');
+      } else {
+        statusBadge.textContent = 'Normal View';
+        statusBadge.classList.remove('active');
+      }
+    }
+
+    document.addEventListener('keydown', (e) => {
+      setTimeout(updateStatus, 50);
+    });
+  </script>
+  <!-- Load Content Script -->
+  <script src="../../content.js"></script>
+</body>
+</html>

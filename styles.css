@@ -1,0 +1,217 @@
+/* ==========================================================================
+   Universal Adaptive Media Maximizer - Isolated Windowed Fullscreen Styles
+   ========================================================================== */
+
+/* uvm-ui class protects our injected elements from the DOM nuke;
+   uvm-maximized protects the media player/canvas element itself. */
+html.uvm-active body > :not(.uvm-ancestor):not(.uvm-maximized):not(.uvm-ui),
+html.uvm-active .uvm-ancestor:not(.uvm-maximized) > :not(.uvm-ancestor):not(.uvm-maximized):not(.uvm-ui) {
+  display: none !important;
+}
+
+/* Neutralize CSS stacking context / containing block traps on ancestor nodes.
+   Any property here left active would trap the fixed-position target inside a
+   lower stacking context (black screen) or a smaller containing block. */
+.uvm-ancestor {
+  /* Pages hide whole containers at some widths (@media, [hidden]); with every
+     sibling hidden and the target fixed, ancestor layout no longer matters. */
+  display: block !important;
+  visibility: visible !important;
+  position: static !important;
+  transform: none !important;
+  translate: none !important;
+  rotate: none !important;
+  scale: none !important;
+  opacity: 1 !important;
+  isolation: auto !important;
+  mix-blend-mode: normal !important;
+  content-visibility: visible !important;
+  container-type: normal !important;
+  zoom: 1 !important;
+  filter: none !important;
+  perspective: none !important;
+  contain: none !important;
+  clip-path: none !important;
+  mask: none !important;
+  will-change: auto !important;
+  backdrop-filter: none !important;
+  overflow: visible !important;
+  z-index: auto !important;
+}
+
+/* Maximized media target */
+.uvm-maximized {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  z-index: 2147483645 !important;
+  background: #000 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  pointer-events: auto !important;
+  box-sizing: border-box !important;
+  max-width: none !important;
+  max-height: none !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  transform: none !important;
+  translate: none !important;
+  rotate: none !important;
+  scale: none !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
+/* Media elements that are (or match the size of) the maximized target are
+   stretched to fill it, letterboxed to keep their aspect ratio. Stacked canvas
+   layers all get this class so they stay aligned. */
+video.uvm-maximized,
+canvas.uvm-maximized,
+.uvm-maximized .uvm-fill {
+  object-fit: contain !important;
+}
+
+.uvm-maximized .uvm-fill {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  top: 0 !important;
+  left: 0 !important;
+}
+
+/* Wrappers between the target and a fill element (e.g. YouTube's
+   .html5-video-container, which is 0px tall because its video is absolutely
+   positioned) must be full size too, or 100% resolves against nothing. */
+.uvm-maximized .uvm-fill-path {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+}
+
+/* Page background behind the letterboxed media */
+html.uvm-active,
+html.uvm-active body {
+  background: #000 !important;
+}
+
+/* Animations and UI Overlays */
+@keyframes uvmBorderFlash {
+  0% {
+    outline: 4px solid #00E676 !important;
+    box-shadow: 0 0 25px #00E676 !important;
+  }
+  50% {
+    outline: 4px solid #00B0FF !important;
+    box-shadow: 0 0 35px #00B0FF !important;
+  }
+  100% {
+    outline: 0px solid transparent !important;
+    box-shadow: none !important;
+  }
+}
+
+.uvm-highlighted {
+  animation: uvmBorderFlash 0.8s ease-out !important;
+}
+
+#uvm-toast {
+  position: fixed !important;
+  top: 24px !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  background: rgba(15, 15, 15, 0.92) !important;
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45) !important;
+  color: #fff !important;
+  padding: 10px 24px !important;
+  border-radius: 30px !important;
+  font: 600 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  z-index: 2147483647 !important;
+  pointer-events: none !important;
+  opacity: 0;
+  transition: opacity 0.25s ease !important;
+}
+
+#uvm-speed-panel {
+  position: fixed !important;
+  top: 20px !important;
+  right: 20px !important;
+  z-index: 2147483647 !important;
+  background: rgba(18, 18, 22, 0.88) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  border-radius: 14px !important;
+  padding: 10px 16px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  color: #fff !important;
+  font: 500 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+  opacity: 0;
+  transform: translateY(-10px);
+  pointer-events: none;
+  transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1), transform 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  user-select: none !important;
+}
+
+#uvm-speed-panel.visible {
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+  pointer-events: auto !important;
+}
+
+/* Hidden after 3s without mouse movement; any mouse move brings it back.
+   pointer-events off so clicks reach the player while it's hidden. */
+#uvm-speed-panel.uvm-idle:not(:hover) {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+#uvm-speed-slider {
+  cursor: pointer !important;
+  width: 110px !important;
+  accent-color: #00B0FF !important;
+}
+
+.uvm-btn {
+  background: rgba(255, 255, 255, 0.12) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  color: #fff !important;
+  padding: 4px 10px !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  transition: background 0.15s ease !important;
+}
+
+.uvm-btn:hover {
+  background: rgba(255, 255, 255, 0.28) !important;
+}
+
+.uvm-btn:active {
+  transform: scale(0.96);
+}
+
+/* Accessibility: Respect user preference for reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .uvm-highlighted {
+    animation: none !important;
+  }
+  #uvm-speed-panel,
+  #uvm-toast,
+  .uvm-btn {
+    transition: none !important;
+    transform: none !important;
+  }
+}
+

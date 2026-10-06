@@ -1,0 +1,7 @@
+.DS_Store
+*.crx
+*.zip
+__pycache__/
+node_modules/
+dist/
+web-ext-artifacts/

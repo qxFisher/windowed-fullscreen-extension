@@ -1,0 +1,29 @@
+{
+  "name": "universal-adaptive-media-maximizer",
+  "version": "1.0.0",
+  "description": "Chrome Extension for universal windowed fullscreen media maximization",
+  "main": "background.js",
+  "scripts": {
+    "start": "web-ext run --target=chromium --chromium-binary=\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "node scripts/build-zip.js",
+    "package": "node scripts/build-zip.js",
+    "check": "node -c background.js content.js universal-media-maximizer.user.js && tsc -p jsconfig.json",
+    "build:userscript": "node scripts/build-userscript.js"
+  },
+  "keywords": [
+    "chrome-extension",
+    "manifest-v3"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/chrome": "^0.3.4",
+    "happy-dom": "^20.14.5",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "web-ext": "^10.7.0"
+  }
+}
