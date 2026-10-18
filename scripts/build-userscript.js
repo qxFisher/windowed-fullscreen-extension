@@ -47,6 +47,9 @@ if (typeof GM_registerMenuCommand === 'function' && window === window.top) {
   GM_registerMenuCommand('Record 15 sec of the video (MP4)', () => {
     window.__UVM_INSTANCE__?.recordClip();
   });
+  GM_registerMenuCommand('Download video (choose start and end)…', () => {
+    window.__UVM_INSTANCE__?.openRangePanel();
+  });
 }
 `;
 

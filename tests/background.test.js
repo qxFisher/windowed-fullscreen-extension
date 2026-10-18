@@ -69,6 +69,27 @@ describe('Background Service Worker', () => {
     );
   });
 
+  it('opens the download range panel in the frame of a right-clicked video', async () => {
+    const { recordClipInTab } = await import('../background.js');
+    chrome.tabs.sendMessage.mockResolvedValueOnce({ success: true });
+
+    await recordClipInTab(7, { mediaType: 'video', frameId: 2, srcUrl: 'https://example.com/v.mp4' }, 'OPEN_RANGE_PANEL');
+
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(
+      7, { action: 'OPEN_RANGE_PANEL', srcUrl: 'https://example.com/v.mp4' }, { frameId: 2 }
+    );
+  });
+
+  it('shows recording progress on the tab toolbar icon', async () => {
+    chrome.action.setBadgeText = vi.fn();
+    chrome.action.setBadgeBackgroundColor = vi.fn();
+    const { showRecordProgress } = await import('../background.js');
+
+    showRecordProgress(9, '42%');
+
+    expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ tabId: 9, text: '42%' });
+  });
+
   it('sends RECORD_CLIP to the top frame from the toolbar icon menu', async () => {
     const { recordClipInTab } = await import('../background.js');
     chrome.tabs.sendMessage.mockResolvedValueOnce({ success: true });

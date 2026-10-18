@@ -9,14 +9,26 @@
   window.__UVM_INITIALIZED__ = true;
 
   const RECORD_SECONDS = 15;
-  // MP4 recording needs Chrome 126+; older browsers fall back to WebM.
+  // Tried in order. AAC audio plays in the most players but its encoder is missing on some
+  // machines, so H.264 + Opus comes next. MP4 needs Chrome 126+; older browsers get WebM.
   const RECORD_MIME_TYPES = [
     'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
     'video/mp4;codecs=avc1,mp4a.40.2',
+    'video/mp4;codecs=avc1,opus',
     'video/mp4',
     'video/webm;codecs=vp9,opus',
     'video/webm'
   ];
+  const RECORD_TICK_MS = 250;
+
+  // 75 -> "1:15", 3725 -> "1:02:05"
+  const formatTime = (seconds) => {
+    const t = Math.max(0, Math.floor(seconds));
+    const h = Math.floor(t / 3600);
+    const m = Math.floor((t % 3600) / 60);
+    const s = String(t % 60).padStart(2, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+  };
 
   class MediaMaximizer {
     constructor() {
@@ -38,6 +50,7 @@
       this.quiet = false;
       this.recorder = null;
       this.recordTimer = null;
+      this.rangeMedia = null;
 
       this.initUI();
       this.bindEvents();
@@ -58,16 +71,39 @@
         <input type="range" id="uvm-speed-slider" min="0.25" max="4.00" step="0.05" value="1.00">
         <button class="uvm-btn" id="uvm-speed-reset">Reset</button>
         <button class="uvm-btn" id="uvm-record-btn" title="Record ${RECORD_SECONDS} sec of the video (MP4)">⏺ ${RECORD_SECONDS}s</button>
+        <button class="uvm-btn" id="uvm-range-btn" title="Download the whole video or a part of it (MP4)">⬇</button>
       `;
 
-      // Prevent interactions inside speed panel from bubbling to video player controls
-      ['click', 'mousedown', 'pointerdown', 'keydown'].forEach(evt => {
-        this.speedPanel.addEventListener(evt, e => e.stopPropagation());
+      // Download panel: start/end sliders over the video's timeline
+      this.rangePanel = document.createElement('div');
+      this.rangePanel.id = 'uvm-range-panel';
+      this.rangePanel.className = 'uvm-ui';
+      this.rangePanel.innerHTML = `
+        <div class="uvm-range-row">
+          <strong>⬇ Download video</strong>
+          <span id="uvm-range-len"></span>
+          <button class="uvm-btn" id="uvm-range-close" title="Close (a running download continues)">✕</button>
+        </div>
+        <label class="uvm-range-row">Start <input type="range" id="uvm-range-start" min="0" step="0.1" value="0"> <span id="uvm-range-start-val">0:00</span></label>
+        <label class="uvm-range-row">End <input type="range" id="uvm-range-end" min="0" step="0.1" value="0"> <span id="uvm-range-end-val">0:00</span></label>
+        <div class="uvm-range-row">
+          <span id="uvm-range-status"></span>
+          <button class="uvm-btn" id="uvm-range-full">Whole video</button>
+          <button class="uvm-btn" id="uvm-range-go">⬇ Download</button>
+        </div>
+      `;
+
+      // Prevent interactions inside our panels from bubbling to video player controls
+      [this.speedPanel, this.rangePanel].forEach(panel => {
+        ['click', 'mousedown', 'pointerdown', 'keydown'].forEach(evt => {
+          panel.addEventListener(evt, e => e.stopPropagation());
+        });
       });
 
       const root = document.body || document.documentElement;
       root.appendChild(this.toast);
       root.appendChild(this.speedPanel);
+      root.appendChild(this.rangePanel);
 
       this.slider = this.speedPanel.querySelector('#uvm-speed-slider');
       this.speedVal = this.speedPanel.querySelector('#uvm-speed-val');
@@ -76,6 +112,27 @@
       this.speedPanel.querySelector('#uvm-speed-reset').addEventListener('click', () => this.setSpeed(1.0));
       this.recordBtn = this.speedPanel.querySelector('#uvm-record-btn');
       this.recordBtn.addEventListener('click', () => this.recordClip());
+      this.speedPanel.querySelector('#uvm-range-btn').addEventListener('click', () => this.openRangePanel());
+
+      const $ = (id) => this.rangePanel.querySelector(id);
+      this.rangeStart = $('#uvm-range-start');
+      this.rangeEnd = $('#uvm-range-end');
+      this.rangeStartVal = $('#uvm-range-start-val');
+      this.rangeEndVal = $('#uvm-range-end-val');
+      this.rangeLen = $('#uvm-range-len');
+      this.rangeStatus = $('#uvm-range-status');
+      this.rangeGo = $('#uvm-range-go');
+
+      const onSlide = (moved) => this.setRange(parseFloat(this.rangeStart.value), parseFloat(this.rangeEnd.value), moved);
+      this.rangeStart.addEventListener('input', () => onSlide('start'));
+      this.rangeEnd.addEventListener('input', () => onSlide('end'));
+      // Releasing a handle previews that moment in the video.
+      [this.rangeStart, this.rangeEnd].forEach(slider => slider.addEventListener('change', () => {
+        if (this.rangeMedia && !this.recorder) this.rangeMedia.currentTime = parseFloat(slider.value);
+      }));
+      $('#uvm-range-full').addEventListener('click', () => this.setRange(0, parseFloat(this.rangeEnd.max)));
+      $('#uvm-range-close').addEventListener('click', () => this.closeRangePanel());
+      this.rangeGo.addEventListener('click', () => this.recordRange());
     }
 
     showToast(msg) {
@@ -356,99 +413,312 @@
       return this.findTarget()?.media || null;
     }
 
-    // Records the media's own frames (no screen-share prompt) and saves the clip locally.
-    // Pausing the video pauses the recording, so the clip holds RECORD_SECONDS of playback.
+    // Records RECORD_SECONDS of the media's own frames (no screen-share prompt) and saves it.
     recordClip(srcUrl) {
-      if (this.recorder) return this.showToast('⏺ Already recording');
+      if (this.recorder || this.recordStarting) return this.showToast('⏺ Already recording');
 
       const media = this.findRecordTarget(srcUrl);
       if (!media) return this.showToast('⚠️ No active media found');
       if (media.tagName === 'IFRAME') return this.postToFrame(media, 'record');
+      if (media.tagName === 'VIDEO' && (media.paused || media.ended)) {
+        return this.showToast('⚠️ Press play first, then record');
+      }
+      this.startRecording(media, { seconds: RECORD_SECONDS });
+    }
+
+    // Opens the start/end sliders for downloading the whole video or a part of it.
+    openRangePanel(srcUrl) {
+      const media = this.findRecordTarget(srcUrl);
+      if (!media) return this.showToast('⚠️ No active media found');
+      if (media.tagName === 'IFRAME') return this.postToFrame(media, 'range');
+      if (media.tagName !== 'VIDEO') return this.showToast(`⚠️ Only videos have a timeline; use ⏺ ${RECORD_SECONDS}s instead`);
+      if (!Number.isFinite(media.duration) || media.duration <= 0) {
+        return this.showToast(`⚠️ Live streams have no fixed length; use ⏺ ${RECORD_SECONDS}s instead`);
+      }
+
+      if (!this.recorder) {
+        this.rangeMedia = media;
+        const duration = Math.floor(media.duration * 10) / 10;
+        [this.rangeStart, this.rangeEnd].forEach(slider => { slider.max = duration; });
+        this.setRange(0, duration);
+      }
+      this.rangePanel.classList.add('visible');
+    }
+
+    closeRangePanel() {
+      this.rangePanel.classList.remove('visible');
+    }
+
+    // Keeps start < end (at least 1s apart) and the labels in sync with the sliders.
+    setRange(start, end, moved) {
+      const max = parseFloat(this.rangeEnd.max) || 0;
+      start = Math.min(Math.max(0, start), max);
+      end = Math.min(Math.max(0, end), max);
+      if (end - start < 1) {
+        if (moved === 'end') start = Math.max(0, end - 1);
+        else end = Math.min(max, start + 1);
+      }
+      this.rangeStart.value = start;
+      this.rangeEnd.value = end;
+      this.rangeStartVal.textContent = formatTime(start);
+      this.rangeEndVal.textContent = formatTime(end);
+      this.rangeLen.textContent = `${formatTime(end - start)} selected`;
+    }
+
+    async recordRange() {
+      if (this.recordStarting) return;
+      if (this.recorder) return this.stopRecording?.();
+      const media = this.rangeMedia;
+      if (!media?.isConnected) {
+        this.closeRangePanel();
+        return this.showToast('⚠️ The video is gone; open the download panel again');
+      }
+      const start = parseFloat(this.rangeStart.value);
+      const end = Math.min(parseFloat(this.rangeEnd.value), media.duration);
+
+      this.rangeStatus.textContent = 'Seeking to start…';
+      if (Math.abs(media.currentTime - start) > 0.25) {
+        await new Promise(resolve => {
+          media.addEventListener('seeked', resolve, { once: true });
+          setTimeout(resolve, 5000);
+          media.currentTime = start;
+        });
+      }
+      try {
+        await media.play();
+      } catch (err) {
+        this.rangeStatus.textContent = '';
+        return this.showToast('⚠️ Press play first, then download');
+      }
+      this.startRecording(media, { start, end });
+    }
+
+    // Chrome keeps adding tracks to a <video>'s captured stream for a moment after
+    // captureStream() returns (seen on YouTube). Resolves once the track set has been quiet
+    // for 300ms, or after 1.5s at most.
+    settleStream(stream) {
+      if (!stream.addEventListener) return Promise.resolve();
+      return new Promise(resolve => {
+        let quiet;
+        const done = () => {
+          clearTimeout(quiet);
+          clearTimeout(cap);
+          stream.removeEventListener('addtrack', bump);
+          stream.removeEventListener('removetrack', bump);
+          resolve();
+        };
+        const bump = () => {
+          clearTimeout(quiet);
+          quiet = setTimeout(done, 300);
+        };
+        const cap = setTimeout(done, 1500);
+        stream.addEventListener('addtrack', bump);
+        stream.addEventListener('removetrack', bump);
+        bump();
+      });
+    }
+
+    // Shared recorder. { seconds } records that much playback; { start, end } records
+    // until the video reaches `end`. Pausing the video pauses the recording either way.
+    async startRecording(media, { seconds, start, end }) {
+      if (this.recorder || this.recordStarting) return this.showToast('⏺ Already recording');
       if (typeof media.captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
         return this.showToast('⚠️ This media cannot be recorded');
       }
       const isVideo = media.tagName === 'VIDEO';
-      if (isVideo && (media.paused || media.ended)) {
-        return this.showToast('⚠️ Press play first, then record');
-      }
+      const isRange = end != null;
+
+      // Timestamped events, printed if the recording comes out empty.
+      const t0 = performance.now();
+      const trace = [];
+      const log = (msg) => trace.push(`${Math.round(performance.now() - t0)}ms ${msg}`);
+      const describeTracks = (s) => s.getTracks().map(t => `${t.kind}:${t.readyState}${t.muted ? ':muted' : ''}`).join(',');
+      const watchTrack = (t) => t.addEventListener?.('ended', () => log(`${t.kind} track ended`));
 
       // Never stop the captured tracks: for a <video> playing a MediaStream (webcam, WebRTC,
       // canvas streams) captureStream() hands back the page's own tracks.
-      let recorder;
-      const mimeType = RECORD_MIME_TYPES.find(t => MediaRecorder.isTypeSupported(t)) || '';
+      let stream;
       try {
         // Cross-origin video and tainted canvases refuse capture.
-        const stream = media.captureStream();
-        if (!stream.getTracks().some(t => t.readyState === 'live')) throw new Error('No live tracks to record');
-        recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-        recorder.start();
+        stream = media.captureStream();
       } catch (err) {
         console.warn('Universal Adaptive Media Maximizer: unable to record media', err);
+        this.rangeStatus.textContent = '';
+        return this.showToast('⚠️ This media is protected and cannot be recorded');
+      }
+      log(`captured ${describeTracks(stream)}`);
+      stream.getTracks().forEach(watchTrack);
+      stream.addEventListener?.('addtrack', (e) => { log(`addtrack ${e.track.kind}`); watchTrack(e.track); });
+      stream.addEventListener?.('removetrack', (e) => log(`removetrack ${e.track.kind}`));
+
+      this.recordStarting = true;
+      await this.settleStream(stream);
+      this.recordStarting = false;
+      log(`settled ${describeTracks(stream)}`);
+      if (!stream.getTracks().some(t => t.readyState === 'live')) {
+        console.warn(`Universal Adaptive Media Maximizer: no live tracks to record ${JSON.stringify(trace)}`);
+        this.rangeStatus.textContent = '';
         return this.showToast('⚠️ This media is protected and cannot be recorded');
       }
 
+      const candidates = RECORD_MIME_TYPES.filter(t => MediaRecorder.isTypeSupported(t));
       const chunks = [];
-      let remaining = RECORD_SECONDS;
-      const stop = () => recorder.state !== 'inactive' && recorder.stop();
+      // A looping video could wrap back to 0 before the end check sees it.
+      const wasLooping = isVideo && media.loop;
+      let recorder = null;
+      let recordedMs = 0;
+      let failure = '';
+      const decodedFrames = () => media.getVideoPlaybackQuality?.().totalVideoFrames ?? 0;
+      const framesAtStart = isVideo ? decodedFrames() : 0;
+      // Set when we end the recording (time up, video ended, Stop & save), so a recorder
+      // that stops on its own can be told apart from one we stopped.
+      let stopRequested = false;
+      const stop = () => {
+        stopRequested = true;
+        return recorder.state !== 'inactive' && recorder.stop();
+      };
       const onPause = () => recorder.state === 'recording' && recorder.pause();
       const onPlay = () => recorder.state === 'paused' && recorder.resume();
-      const showStatus = () => this.showToast(recorder.state === 'paused'
-        ? `⏸ Recording paused (${remaining}s left)`
-        : `⏺ Recording… ${remaining}s`);
-
-      if (isVideo) {
-        media.addEventListener('pause', onPause);
-        media.addEventListener('play', onPlay);
-        media.addEventListener('ended', stop);
-      }
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size) chunks.push(e.data);
+      const progress = () => isRange
+        ? Math.min(1, Math.max(0, (media.currentTime - start) / (end - start)))
+        : recordedMs / (seconds * 1000);
+      const showStatus = () => {
+        const paused = recorder.state === 'paused';
+        const percent = Math.floor(progress() * 100);
+        this.setBadge(`${percent}%`);
+        if (isRange) {
+          this.rangeStatus.textContent = `${paused ? '⏸ Paused' : '⏺ Recording'} ${formatTime(media.currentTime - start)} / ${formatTime(end - start)} (${percent}%)`;
+        } else {
+          const left = Math.ceil(seconds - recordedMs / 1000);
+          this.showToast(paused ? `⏸ Recording paused (${left}s left)` : `⏺ Recording… ${left}s`);
+        }
       };
-      recorder.onerror = (e) => {
-        console.warn('Universal Adaptive Media Maximizer: recording failed', e);
-        stop();
-      };
-      recorder.onstop = () => {
+
+      const finish = () => {
         clearInterval(this.recordTimer);
         this.recordTimer = null;
         this.recorder = null;
+        this.stopRecording = null;
+        this.setBadge('');
         this.recordBtn.classList.remove('uvm-recording');
+        this.rangePanel.classList.remove('uvm-recording');
+        this.rangeGo.textContent = '⬇ Download';
+        this.rangeStatus.textContent = '';
+        if (isRange && wasLooping) media.loop = true;
         if (isVideo) {
           media.removeEventListener('pause', onPause);
           media.removeEventListener('play', onPlay);
           media.removeEventListener('ended', stop);
         }
 
-        if (!chunks.length) return this.showToast('⚠️ Nothing was recorded');
-        const type = recorder.mimeType || mimeType || 'video/webm';
-        this.saveClip(new Blob(chunks, { type }), type.startsWith('video/mp4') ? 'mp4' : 'webm');
+        if (!chunks.length) {
+          const newFrames = isVideo ? decodedFrames() - framesAtStart : null;
+          // A string, not an object: DevTools and log scrapers show objects as "Object".
+          console.warn(`Universal Adaptive Media Maximizer: nothing was recorded ${JSON.stringify({
+            failure,
+            mimeType: recorder.mimeType,
+            tracks: describeTracks(stream),
+            newFrames,
+            trace
+          })}`);
+          const reason = failure || (newFrames === 0 ? 'the video showed no new frames' : '');
+          return this.showToast(`⚠️ Nothing was recorded${reason ? ` (${reason})` : ''}`);
+        }
+        const type = recorder.mimeType || 'video/webm';
+        const label = isRange ? `${formatTime(start)}–${formatTime(media.currentTime)}` : `${seconds}s`;
+        this.saveClip(new Blob(chunks, { type }), type.startsWith('video/mp4') ? 'mp4' : 'webm', label);
       };
 
-      this.recorder = recorder;
-      this.recordBtn.classList.add('uvm-recording');
+      // isTypeSupported() can approve a format whose encoder then refuses to start (AAC on
+      // some Windows machines). The page's world sees an EncodingError, but in a content
+      // script the recorder just stops a few ms in with no error event. Either way, a
+      // recorder that ends before producing any data hands over to the next format.
+      const begin = () => {
+        while (candidates.length) {
+          const mimeType = candidates.shift();
+          try {
+            const next = new MediaRecorder(stream, { mimeType });
+            next.ondataavailable = (e) => {
+              if (chunks.length < 3) log(`data ${e.data.size}`);
+              if (e.data.size) chunks.push(e.data);
+            };
+            next.onerror = (e) => {
+              failure = e.error?.name || 'recorder error';
+              log(`error ${failure}`);
+              console.warn(`Universal Adaptive Media Maximizer: recording as ${mimeType} failed`, e.error || e);
+              if (next.state !== 'inactive') next.stop();
+            };
+            next.onstop = () => {
+              log('stop');
+              if (!chunks.length && !stopRequested) {
+                failure = failure || `encoder refused ${mimeType}`;
+                if (begin()) return;
+              }
+              finish();
+            };
+            // Timeslice: data arrives every second, so a recorder that fails midway still
+            // leaves a partial clip instead of nothing.
+            next.start(1000);
+            log(`start ${mimeType}`);
+            recorder = this.recorder = next;
+            return true;
+          } catch (err) {
+            failure = err.name || 'recorder error';
+            console.warn(`Universal Adaptive Media Maximizer: cannot record as ${mimeType}`, err);
+          }
+        }
+        return false;
+      };
+
+      if (!begin()) {
+        this.rangeStatus.textContent = '';
+        return this.showToast('⚠️ This media cannot be recorded in this browser');
+      }
+      this.stopRecording = stop;
+
+      if (isVideo) {
+        media.addEventListener('pause', onPause);
+        media.addEventListener('play', onPlay);
+        media.addEventListener('ended', stop);
+      }
+      if (isRange) {
+        if (wasLooping) media.loop = false;
+        this.rangePanel.classList.add('uvm-recording');
+        this.rangeGo.textContent = '■ Stop & save';
+      } else {
+        this.recordBtn.classList.add('uvm-recording');
+      }
       showStatus();
       // Only time spent actually recording counts toward the clip length.
       this.recordTimer = setInterval(() => {
-        if (recorder.state === 'recording') remaining -= 1;
-        if (remaining <= 0) return stop();
+        if (recorder.state === 'recording') recordedMs += RECORD_TICK_MS;
+        if (isRange ? media.currentTime >= end : recordedMs >= seconds * 1000) return stop();
         showStatus();
-      }, 1000);
+      }, RECORD_TICK_MS);
     }
 
-    saveClip(blob, ext) {
+    // Progress on the toolbar icon, so a long download can be followed from other tabs.
+    setBadge(text) {
+      try {
+        chrome.runtime?.sendMessage?.({ action: 'RECORD_PROGRESS', text })?.catch?.(() => {});
+      } catch (err) {
+        // Userscript, or the extension was reloaded under this page: no badge then.
+      }
+    }
+
+    saveClip(blob, ext, label) {
       const title = (document.title || '').replace(/[\\/:*?"<>|]+/g, '').trim().slice(0, 80) || 'video';
       const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const url = URL.createObjectURL(blob);
       // Detached link: the click can't bubble into SPA routers or player handlers.
       const link = document.createElement('a');
       link.href = url;
-      link.download = `${title} ${stamp}.${ext}`;
+      link.download = `${title} ${label.replace(/[:–]/g, m => (m === ':' ? '.' : '-'))} ${stamp}.${ext}`;
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
       this.showToast(ext === 'mp4'
-        ? `✅ Saved ${RECORD_SECONDS}s clip (MP4)`
-        : '✅ Saved clip as WebM (this browser cannot record MP4)');
+        ? `✅ Saved ${label} clip (MP4)`
+        : `✅ Saved ${label} clip as WebM (this browser cannot record MP4)`);
     }
 
     // In a subframe, the decision belongs to the top frame: it maximizes this frame's
@@ -502,6 +772,7 @@
           this.toggle();
         } else if (e.source === window.parent && window !== window.top) {
           if (type === 'record') return this.recordClip();
+          if (type === 'range') return this.openRangePanel();
           this.quiet = true;
           if (type === 'maximize' && !this.isActive) this.toggle();
           if (type === 'restore') this.restore();
@@ -524,6 +795,10 @@
           // The background already picked the frame (top, or the right-clicked video's frame).
           if (request.action === 'RECORD_CLIP') {
             this.recordClip(request.srcUrl);
+            sendResponse?.({ success: true });
+          }
+          if (request.action === 'OPEN_RANGE_PANEL') {
+            this.openRangePanel(request.srcUrl);
             sendResponse?.({ success: true });
           }
         });

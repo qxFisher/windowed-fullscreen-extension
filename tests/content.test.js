@@ -399,16 +399,22 @@ describe('MediaMaximizer Content Script', () => {
       Object.defineProperty(video, 'readyState', { value: 4, configurable: true });
       Object.defineProperty(video, 'offsetWidth', { value: 640, configurable: true });
       Object.defineProperty(video, 'offsetHeight', { value: 360, configurable: true });
-      video.captureStream = vi.fn(() => ({ getTracks: () => [track] }));
+      video.captureStream = vi.fn(() => {
+        video.lastStream = Object.assign(new EventTarget(), { getTracks: () => [track] });
+        return video.lastStream;
+      });
       document.body.appendChild(video);
       return video;
     };
+
+    // The recorder starts once the captured stream's tracks have been quiet for 300ms.
+    const settle = () => vi.advanceTimersByTimeAsync(300);
 
     beforeEach(() => {
       vi.useFakeTimers();
       FakeRecorder.last = null;
       globalThis.MediaRecorder = FakeRecorder;
-      track = { readyState: 'live', stop: vi.fn() };
+      track = Object.assign(new EventTarget(), { kind: 'video', readyState: 'live', muted: false, stop: vi.fn() });
       downloads = [];
       URL.createObjectURL = vi.fn(() => 'blob:clip');
       URL.revokeObjectURL = vi.fn();
@@ -423,10 +429,11 @@ describe('MediaMaximizer Content Script', () => {
       vi.useRealTimers();
     });
 
-    it('records the playing video for 15 seconds and saves it as mp4', () => {
+    it('records the playing video for 15 seconds and saves it as mp4', async () => {
       const video = makePlayingVideo();
 
       maximizer.recordClip();
+      await settle();
       expect(video.captureStream).toHaveBeenCalled();
       expect(FakeRecorder.last.mimeType).toMatch(/^video\/mp4/);
       expect(FakeRecorder.last.state).toBe('recording');
@@ -444,10 +451,29 @@ describe('MediaMaximizer Content Script', () => {
       expect(document.getElementById('uvm-record-btn').classList.contains('uvm-recording')).toBe(false);
     });
 
-    it('pauses the recording and countdown while the video is paused', () => {
+    it('waits for Chrome to finish adding tracks to the captured stream before recording', async () => {
       const video = makePlayingVideo();
 
       maximizer.recordClip();
+      await vi.advanceTimersByTimeAsync(200);
+      const added = new Event('addtrack');
+      added.track = track;
+      video.lastStream.dispatchEvent(added);
+
+      await vi.advanceTimersByTimeAsync(250);
+      expect(FakeRecorder.last).toBeNull();
+      expect(maximizer.recordClip()).toBeUndefined();
+      expect(document.getElementById('uvm-toast').textContent).toBe('⏺ Already recording');
+
+      await vi.advanceTimersByTimeAsync(50);
+      expect(FakeRecorder.last.state).toBe('recording');
+    });
+
+    it('pauses the recording and countdown while the video is paused', async () => {
+      const video = makePlayingVideo();
+
+      maximizer.recordClip();
+      await settle();
       vi.advanceTimersByTime(5000);
       video.dispatchEvent(new Event('pause'));
       expect(FakeRecorder.last.state).toBe('paused');
@@ -480,20 +506,196 @@ describe('MediaMaximizer Content Script', () => {
       expect(document.getElementById('uvm-toast').textContent).toContain('protected');
     });
 
-    it('does not get stuck when the recorder fails to start', () => {
+    // Chrome fires error, then stop, when an encoder refuses its configuration.
+    const failEncoder = (rec) => {
+      rec.stop = function () { this.state = 'inactive'; this.onstop(); };
+      rec.onerror({ error: new DOMException('The given encoder configuration is not supported by the encoder.', 'EncodingError') });
+    };
+
+    it('falls back to the next format when the encoder rejects one (AAC on some Windows machines)', async () => {
       makePlayingVideo();
       vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const startSpy = vi.spyOn(FakeRecorder.prototype, 'start').mockImplementationOnce(() => {
+      const startSpy = vi.spyOn(FakeRecorder.prototype, 'start');
+
+      maximizer.recordClip();
+      await settle();
+      expect(startSpy).toHaveBeenCalledWith(1000);
+      const aac = FakeRecorder.last;
+      expect(aac.mimeType).toBe('video/mp4;codecs=avc1.42E01E,mp4a.40.2');
+
+      failEncoder(aac);
+      expect(FakeRecorder.last).not.toBe(aac);
+      expect(FakeRecorder.last.mimeType).toBe('video/mp4;codecs=avc1,mp4a.40.2');
+
+      failEncoder(FakeRecorder.last);
+      expect(FakeRecorder.last.mimeType).toBe('video/mp4;codecs=avc1,opus');
+      expect(maximizer.recorder).toBe(FakeRecorder.last);
+
+      vi.advanceTimersByTime(15000);
+      expect(downloads).toHaveLength(1);
+      expect(downloads[0]).toMatch(/\.mp4$/);
+      startSpy.mockRestore();
+    });
+
+    it('also falls back when the recorder stops by itself without an error (content-script world)', async () => {
+      makePlayingVideo();
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      maximizer.recordClip();
+      await settle();
+      const aac = FakeRecorder.last;
+      // Seen in Chrome's isolated world: "data 0", "stop", and no error event.
+      aac.state = 'inactive';
+      aac.ondataavailable({ data: new Blob([]) });
+      aac.onstop();
+
+      expect(FakeRecorder.last).not.toBe(aac);
+      expect(FakeRecorder.last.state).toBe('recording');
+      vi.advanceTimersByTime(15000);
+      expect(downloads).toHaveLength(1);
+    });
+
+    it('explains a recording that produced no data once every format has failed', async () => {
+      makePlayingVideo();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const supported = vi.spyOn(FakeRecorder, 'isTypeSupported').mockImplementation(t => t === 'video/mp4');
+
+      maximizer.recordClip();
+      await settle();
+      failEncoder(FakeRecorder.last);
+      // The trace is a plain string so it survives console scraping ("Object" otherwise).
+      const report = warn.mock.calls.map(args => args[0]).find(msg => msg.includes('nothing was recorded'));
+      expect(report).toMatch(/"trace":\[".*captured video:live.*start video\/mp4.*error EncodingError.*stop"\]/);
+
+      expect(downloads).toHaveLength(0);
+      expect(maximizer.recorder).toBeNull();
+      expect(document.getElementById('uvm-toast').textContent).toBe('⚠️ Nothing was recorded (EncodingError)');
+      supported.mockRestore();
+    });
+
+    describe('download range panel', () => {
+      const makeSeekableVideo = (duration) => {
+        const video = makePlayingVideo();
+        let time = 0;
+        Object.defineProperty(video, 'duration', { value: duration, configurable: true });
+        Object.defineProperty(video, 'currentTime', {
+          configurable: true,
+          get: () => time,
+          set: (t) => { time = t; video.dispatchEvent(new Event('seeked')); }
+        });
+        video.play = vi.fn().mockResolvedValue(undefined);
+        return video;
+      };
+      const panel = () => document.getElementById('uvm-range-panel');
+      const slider = (which) => document.getElementById(`uvm-range-${which}`);
+
+      it('opens with the whole video selected', () => {
+        makeSeekableVideo(125);
+
+        maximizer.openRangePanel();
+
+        expect(panel().classList.contains('visible')).toBe(true);
+        expect(parseFloat(slider('start').value)).toBe(0);
+        expect(parseFloat(slider('end').value)).toBe(125);
+        expect(document.getElementById('uvm-range-end-val').textContent).toBe('2:05');
+        expect(document.getElementById('uvm-range-len').textContent).toBe('2:05 selected');
+      });
+
+      it('keeps the start at least one second before the end', () => {
+        makeSeekableVideo(60);
+        maximizer.openRangePanel();
+
+        maximizer.setRange(50, 40, 'start');
+        expect(parseFloat(slider('start').value)).toBe(50);
+        expect(parseFloat(slider('end').value)).toBe(51);
+
+        maximizer.setRange(20, 10, 'end');
+        expect(parseFloat(slider('start').value)).toBe(9);
+        expect(parseFloat(slider('end').value)).toBe(10);
+      });
+
+      it('refuses live streams, which have no fixed length', () => {
+        makeSeekableVideo(Infinity);
+
+        maximizer.openRangePanel();
+
+        expect(panel().classList.contains('visible')).toBe(false);
+        expect(document.getElementById('uvm-toast').textContent).toContain('Live streams');
+      });
+
+      it('seeks to the start, records until the end, then saves the range', async () => {
+        const video = makeSeekableVideo(300);
+        maximizer.openRangePanel();
+        maximizer.setRange(30, 90);
+
+        await maximizer.recordRange();
+        await settle();
+
+        expect(video.currentTime).toBe(30);
+        expect(video.play).toHaveBeenCalled();
+        expect(panel().classList.contains('uvm-recording')).toBe(true);
+        expect(document.getElementById('uvm-range-go').textContent).toBe('■ Stop & save');
+
+        video.currentTime = 60;
+        vi.advanceTimersByTime(250);
+        expect(document.getElementById('uvm-range-status').textContent).toBe('⏺ Recording 0:30 / 1:00 (50%)');
+        expect(downloads).toHaveLength(0);
+
+        video.currentTime = 90;
+        vi.advanceTimersByTime(250);
+        expect(downloads).toHaveLength(1);
+        expect(downloads[0]).toMatch(/ 0\.30-1\.30 .*\.mp4$/);
+        expect(panel().classList.contains('uvm-recording')).toBe(false);
+        expect(document.getElementById('uvm-toast').textContent).toBe('✅ Saved 0:30–1:30 clip (MP4)');
+      });
+
+      it('stops early and saves what was recorded when Stop & save is pressed', async () => {
+        const video = makeSeekableVideo(300);
+        maximizer.openRangePanel();
+
+        await maximizer.recordRange();
+        await settle();
+        video.currentTime = 42;
+        await maximizer.recordRange();
+
+        expect(downloads).toHaveLength(1);
+        expect(downloads[0]).toMatch(/ 0\.00-0\.42 /);
+      });
+
+      it('does not retry another format when the user stops before the first data arrives', async () => {
+        makeSeekableVideo(300);
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        maximizer.openRangePanel();
+
+        await maximizer.recordRange();
+        await settle();
+        const first = FakeRecorder.last;
+        first.stop = function () { this.state = 'inactive'; this.onstop(); };
+        await maximizer.recordRange();
+
+        expect(FakeRecorder.last).toBe(first);
+        expect(maximizer.recorder).toBeNull();
+        expect(document.getElementById('uvm-toast').textContent).toContain('Nothing was recorded');
+      });
+    });
+
+    it('does not get stuck when the recorder fails to start', async () => {
+      makePlayingVideo();
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const startSpy = vi.spyOn(FakeRecorder.prototype, 'start').mockImplementation(() => {
         throw new DOMException('There was an error starting the MediaRecorder.', 'NotSupportedError');
       });
 
       maximizer.recordClip();
+      await settle();
       expect(maximizer.recorder).toBeNull();
       expect(document.getElementById('uvm-record-btn').classList.contains('uvm-recording')).toBe(false);
+      expect(document.getElementById('uvm-toast').textContent).toContain('cannot be recorded');
 
-      maximizer.recordClip();
-      expect(FakeRecorder.last.state).toBe('recording');
       startSpy.mockRestore();
+      maximizer.recordClip();
+      await settle();
+      expect(FakeRecorder.last.state).toBe('recording');
     });
   });
 });
