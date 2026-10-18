@@ -16,6 +16,7 @@ Unlike native full-screen mode (which hijacks your operating system screen and h
 - **Smart Media Target Detection**: Automatically targets currently playing video or WebGL canvas elements (ignoring tracking pixels and background banners).
 - **Non-Destructive Player Preservation**: Keeps native video player controls, subtitles, play/pause overlays, and captions completely accessible.
 - **Precision Speed Controller**: Floating overlay supporting 0.25x to 4.00x playback speeds with pitch preservation and instant reset.
+- **Record 15-Second Clips**: Right-click the toolbar icon (or a video) and choose **Record 15 sec of the video (MP4)**, or press **⏺ 15s** in the speed panel. Captures the video's own frames and audio (no screen-share prompt) and saves an `.mp4` to your Downloads folder. Pausing the video pauses the recording. Requires Chrome 126+ for MP4 (older browsers save WebM); DRM-protected and cross-origin media cannot be recorded.
 - **Auto-Hiding Overlay**: The speed panel hides completely after 3 seconds without mouse movement and reappears instantly when the cursor moves.
 - **Event Isolation**: Clicks, drags, and slider adjustments inside the speed panel never trigger video pause or underlying page interactions.
 

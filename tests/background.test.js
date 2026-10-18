@@ -57,4 +57,24 @@ describe('Background Service Worker', () => {
     });
     expect(chrome.tabs.sendMessage).toHaveBeenCalledTimes(2);
   });
+
+  it('sends RECORD_CLIP to the frame of a right-clicked video', async () => {
+    const { recordClipInTab } = await import('../background.js');
+    chrome.tabs.sendMessage.mockResolvedValueOnce({ success: true });
+
+    await recordClipInTab(7, { mediaType: 'video', frameId: 3, srcUrl: 'https://example.com/v.mp4' });
+
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(
+      7, { action: 'RECORD_CLIP', srcUrl: 'https://example.com/v.mp4' }, { frameId: 3 }
+    );
+  });
+
+  it('sends RECORD_CLIP to the top frame from the toolbar icon menu', async () => {
+    const { recordClipInTab } = await import('../background.js');
+    chrome.tabs.sendMessage.mockResolvedValueOnce({ success: true });
+
+    await recordClipInTab(7, { menuItemId: 'record-clip' });
+
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(7, { action: 'RECORD_CLIP', srcUrl: undefined }, { frameId: 0 });
+  });
 });

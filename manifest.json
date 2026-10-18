@@ -5,6 +5,7 @@
   "description": "Flawlessly expands video/canvas to windowed fullscreen, bypassing SPA DOM traps with speed controls.",
   "permissions": [
     "scripting",
+    "contextMenus",
     "activeTab"
   ],
   "action": {

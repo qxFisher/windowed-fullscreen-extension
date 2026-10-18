@@ -368,4 +368,132 @@ describe('MediaMaximizer Content Script', () => {
     }));
     expect(maximizer.isActive).toBe(true);
   });
+
+  describe('15 second clip recording', () => {
+    let track;
+    let clickSpy;
+    let downloads;
+
+    class FakeRecorder {
+      static isTypeSupported = (type) => type.startsWith('video/mp4');
+      constructor(stream, opts) {
+        this.stream = stream;
+        this.mimeType = opts?.mimeType || '';
+        this.state = 'inactive';
+        FakeRecorder.last = this;
+      }
+      start() { this.state = 'recording'; }
+      pause() { this.state = 'paused'; }
+      resume() { this.state = 'recording'; }
+      stop() {
+        this.state = 'inactive';
+        this.ondataavailable({ data: new Blob(['frames']) });
+        this.onstop();
+      }
+    }
+
+    const makePlayingVideo = () => {
+      const video = document.createElement('video');
+      Object.defineProperty(video, 'paused', { value: false, configurable: true });
+      Object.defineProperty(video, 'ended', { value: false, configurable: true });
+      Object.defineProperty(video, 'readyState', { value: 4, configurable: true });
+      Object.defineProperty(video, 'offsetWidth', { value: 640, configurable: true });
+      Object.defineProperty(video, 'offsetHeight', { value: 360, configurable: true });
+      video.captureStream = vi.fn(() => ({ getTracks: () => [track] }));
+      document.body.appendChild(video);
+      return video;
+    };
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      FakeRecorder.last = null;
+      globalThis.MediaRecorder = FakeRecorder;
+      track = { readyState: 'live', stop: vi.fn() };
+      downloads = [];
+      URL.createObjectURL = vi.fn(() => 'blob:clip');
+      URL.revokeObjectURL = vi.fn();
+      clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function () {
+        downloads.push(this.download);
+      });
+    });
+
+    afterEach(() => {
+      clickSpy.mockRestore();
+      delete globalThis.MediaRecorder;
+      vi.useRealTimers();
+    });
+
+    it('records the playing video for 15 seconds and saves it as mp4', () => {
+      const video = makePlayingVideo();
+
+      maximizer.recordClip();
+      expect(video.captureStream).toHaveBeenCalled();
+      expect(FakeRecorder.last.mimeType).toMatch(/^video\/mp4/);
+      expect(FakeRecorder.last.state).toBe('recording');
+      expect(document.getElementById('uvm-record-btn').classList.contains('uvm-recording')).toBe(true);
+
+      vi.advanceTimersByTime(14000);
+      expect(downloads).toHaveLength(0);
+
+      vi.advanceTimersByTime(1000);
+      expect(downloads).toHaveLength(1);
+      expect(downloads[0]).toMatch(/\.mp4$/);
+      // The tracks may be the page's own (srcObject video); stopping them would kill its stream.
+      expect(track.stop).not.toHaveBeenCalled();
+      expect(maximizer.recorder).toBeNull();
+      expect(document.getElementById('uvm-record-btn').classList.contains('uvm-recording')).toBe(false);
+    });
+
+    it('pauses the recording and countdown while the video is paused', () => {
+      const video = makePlayingVideo();
+
+      maximizer.recordClip();
+      vi.advanceTimersByTime(5000);
+      video.dispatchEvent(new Event('pause'));
+      expect(FakeRecorder.last.state).toBe('paused');
+
+      vi.advanceTimersByTime(30000);
+      expect(downloads).toHaveLength(0);
+
+      video.dispatchEvent(new Event('play'));
+      expect(FakeRecorder.last.state).toBe('recording');
+      vi.advanceTimersByTime(10000);
+      expect(downloads).toHaveLength(1);
+    });
+
+    it('refuses to record a paused video', () => {
+      const video = makePlayingVideo();
+      Object.defineProperty(video, 'paused', { value: true, configurable: true });
+
+      maximizer.recordClip();
+      expect(video.captureStream).not.toHaveBeenCalled();
+      expect(document.getElementById('uvm-toast').textContent).toContain('Press play');
+    });
+
+    it('reports protected media that refuses capture', () => {
+      const video = makePlayingVideo();
+      video.captureStream = vi.fn(() => { throw new DOMException('cross-origin', 'SecurityError'); });
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      maximizer.recordClip();
+      expect(maximizer.recorder).toBeNull();
+      expect(document.getElementById('uvm-toast').textContent).toContain('protected');
+    });
+
+    it('does not get stuck when the recorder fails to start', () => {
+      makePlayingVideo();
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const startSpy = vi.spyOn(FakeRecorder.prototype, 'start').mockImplementationOnce(() => {
+        throw new DOMException('There was an error starting the MediaRecorder.', 'NotSupportedError');
+      });
+
+      maximizer.recordClip();
+      expect(maximizer.recorder).toBeNull();
+      expect(document.getElementById('uvm-record-btn').classList.contains('uvm-recording')).toBe(false);
+
+      maximizer.recordClip();
+      expect(FakeRecorder.last.state).toBe('recording');
+      startSpy.mockRestore();
+    });
+  });
 });

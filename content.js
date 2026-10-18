@@ -8,6 +8,16 @@
   if (window.__UVM_INITIALIZED__) return;
   window.__UVM_INITIALIZED__ = true;
 
+  const RECORD_SECONDS = 15;
+  // MP4 recording needs Chrome 126+; older browsers fall back to WebM.
+  const RECORD_MIME_TYPES = [
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+    'video/mp4;codecs=avc1,mp4a.40.2',
+    'video/mp4',
+    'video/webm;codecs=vp9,opus',
+    'video/webm'
+  ];
+
   class MediaMaximizer {
     constructor() {
       this.isActive = false;
@@ -26,6 +36,8 @@
       };
       this.media = null;
       this.quiet = false;
+      this.recorder = null;
+      this.recordTimer = null;
 
       this.initUI();
       this.bindEvents();
@@ -45,6 +57,7 @@
         <span>⚡ <strong id="uvm-speed-val">1.00x</strong></span>
         <input type="range" id="uvm-speed-slider" min="0.25" max="4.00" step="0.05" value="1.00">
         <button class="uvm-btn" id="uvm-speed-reset">Reset</button>
+        <button class="uvm-btn" id="uvm-record-btn" title="Record ${RECORD_SECONDS} sec of the video (MP4)">⏺ ${RECORD_SECONDS}s</button>
       `;
 
       // Prevent interactions inside speed panel from bubbling to video player controls
@@ -61,6 +74,8 @@
 
       this.slider.addEventListener('input', (e) => this.setSpeed(e.target.value));
       this.speedPanel.querySelector('#uvm-speed-reset').addEventListener('click', () => this.setSpeed(1.0));
+      this.recordBtn = this.speedPanel.querySelector('#uvm-record-btn');
+      this.recordBtn.addEventListener('click', () => this.recordClip());
     }
 
     showToast(msg) {
@@ -330,6 +345,112 @@
       if (!this.quiet) this.showToast('Windowed Fullscreen: OFF');
     }
 
+    // A right-clicked video wins; otherwise the maximized media, otherwise the same pick
+    // the maximizer would make. An iframe result means the media lives in that frame.
+    findRecordTarget(srcUrl) {
+      if (srcUrl) {
+        const clicked = Array.from(document.querySelectorAll('video')).find(v => v.currentSrc === srcUrl || v.src === srcUrl);
+        if (clicked) return clicked;
+      }
+      if (this.isActive && this.media) return this.media;
+      return this.findTarget()?.media || null;
+    }
+
+    // Records the media's own frames (no screen-share prompt) and saves the clip locally.
+    // Pausing the video pauses the recording, so the clip holds RECORD_SECONDS of playback.
+    recordClip(srcUrl) {
+      if (this.recorder) return this.showToast('⏺ Already recording');
+
+      const media = this.findRecordTarget(srcUrl);
+      if (!media) return this.showToast('⚠️ No active media found');
+      if (media.tagName === 'IFRAME') return this.postToFrame(media, 'record');
+      if (typeof media.captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
+        return this.showToast('⚠️ This media cannot be recorded');
+      }
+      const isVideo = media.tagName === 'VIDEO';
+      if (isVideo && (media.paused || media.ended)) {
+        return this.showToast('⚠️ Press play first, then record');
+      }
+
+      // Never stop the captured tracks: for a <video> playing a MediaStream (webcam, WebRTC,
+      // canvas streams) captureStream() hands back the page's own tracks.
+      let recorder;
+      const mimeType = RECORD_MIME_TYPES.find(t => MediaRecorder.isTypeSupported(t)) || '';
+      try {
+        // Cross-origin video and tainted canvases refuse capture.
+        const stream = media.captureStream();
+        if (!stream.getTracks().some(t => t.readyState === 'live')) throw new Error('No live tracks to record');
+        recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+        recorder.start();
+      } catch (err) {
+        console.warn('Universal Adaptive Media Maximizer: unable to record media', err);
+        return this.showToast('⚠️ This media is protected and cannot be recorded');
+      }
+
+      const chunks = [];
+      let remaining = RECORD_SECONDS;
+      const stop = () => recorder.state !== 'inactive' && recorder.stop();
+      const onPause = () => recorder.state === 'recording' && recorder.pause();
+      const onPlay = () => recorder.state === 'paused' && recorder.resume();
+      const showStatus = () => this.showToast(recorder.state === 'paused'
+        ? `⏸ Recording paused (${remaining}s left)`
+        : `⏺ Recording… ${remaining}s`);
+
+      if (isVideo) {
+        media.addEventListener('pause', onPause);
+        media.addEventListener('play', onPlay);
+        media.addEventListener('ended', stop);
+      }
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size) chunks.push(e.data);
+      };
+      recorder.onerror = (e) => {
+        console.warn('Universal Adaptive Media Maximizer: recording failed', e);
+        stop();
+      };
+      recorder.onstop = () => {
+        clearInterval(this.recordTimer);
+        this.recordTimer = null;
+        this.recorder = null;
+        this.recordBtn.classList.remove('uvm-recording');
+        if (isVideo) {
+          media.removeEventListener('pause', onPause);
+          media.removeEventListener('play', onPlay);
+          media.removeEventListener('ended', stop);
+        }
+
+        if (!chunks.length) return this.showToast('⚠️ Nothing was recorded');
+        const type = recorder.mimeType || mimeType || 'video/webm';
+        this.saveClip(new Blob(chunks, { type }), type.startsWith('video/mp4') ? 'mp4' : 'webm');
+      };
+
+      this.recorder = recorder;
+      this.recordBtn.classList.add('uvm-recording');
+      showStatus();
+      // Only time spent actually recording counts toward the clip length.
+      this.recordTimer = setInterval(() => {
+        if (recorder.state === 'recording') remaining -= 1;
+        if (remaining <= 0) return stop();
+        showStatus();
+      }, 1000);
+    }
+
+    saveClip(blob, ext) {
+      const title = (document.title || '').replace(/[\\/:*?"<>|]+/g, '').trim().slice(0, 80) || 'video';
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const url = URL.createObjectURL(blob);
+      // Detached link: the click can't bubble into SPA routers or player handlers.
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${title} ${stamp}.${ext}`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      this.showToast(ext === 'mp4'
+        ? `✅ Saved ${RECORD_SECONDS}s clip (MP4)`
+        : '✅ Saved clip as WebM (this browser cannot record MP4)');
+    }
+
     // In a subframe, the decision belongs to the top frame: it maximizes this frame's
     // <iframe> and then sends 'maximize' down so we fill the frame with our own media.
     requestToggle() {
@@ -380,6 +501,7 @@
         if (type === 'toggle' && window === window.top) {
           this.toggle();
         } else if (e.source === window.parent && window !== window.top) {
+          if (type === 'record') return this.recordClip();
           this.quiet = true;
           if (type === 'maximize' && !this.isActive) this.toggle();
           if (type === 'restore') this.restore();
@@ -398,6 +520,11 @@
           if (request.action === 'TOGGLE_MAXIMIZER' && window === window.top) {
             this.toggle();
             sendResponse?.({ success: true, active: this.isActive });
+          }
+          // The background already picked the frame (top, or the right-clicked video's frame).
+          if (request.action === 'RECORD_CLIP') {
+            this.recordClip(request.srcUrl);
+            sendResponse?.({ success: true });
           }
         });
       }

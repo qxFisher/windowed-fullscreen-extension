@@ -202,6 +202,11 @@ html.uvm-active body {
   transform: scale(0.96);
 }
 
+#uvm-record-btn.uvm-recording {
+  background: rgba(220, 38, 38, 0.85) !important;
+  border-color: rgba(248, 113, 113, 0.9) !important;
+}
+
 /* Accessibility: Respect user preference for reduced motion */
 @media (prefers-reduced-motion: reduce) {
   .uvm-highlighted {

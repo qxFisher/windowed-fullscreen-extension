@@ -44,6 +44,9 @@ if (typeof GM_registerMenuCommand === 'function' && window === window.top) {
   GM_registerMenuCommand('Toggle Windowed Fullscreen (Alt+Shift+F)', () => {
     window.__UVM_INSTANCE__?.toggle();
   });
+  GM_registerMenuCommand('Record 15 sec of the video (MP4)', () => {
+    window.__UVM_INSTANCE__?.recordClip();
+  });
 }
 `;
 
